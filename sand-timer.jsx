@@ -524,11 +524,12 @@ function SandTimer() {
         lastTsRef.current = null;
       }, 400 * timeScale);
 
-      // Flip another same direction so full sand is on top
+      // Flip again (random direction) so full sand is on top
       setTimeout(() => {
         setResetting(false);
-        setRotation(r => r + dir);
-        setSandRotation(r => r + dir);
+        const dir2 = Math.random() < 0.5 ? -180 : 180;
+        setRotation(r => r + dir2);
+        setSandRotation(r => r + dir2);
       }, 900 * timeScale);
 
       // End animation and normalize rotations (100ms delay after rotation stops)
