@@ -84,8 +84,12 @@ function SandTimer() {
   const rotationRef = useRef(null);  // Rotation container
   const glassRef   = useRef(null);
   const glassRefB  = useRef(null);
-  const pauseFramesRef = useRef([]);
-  const pauseFramesBRef = useRef([]);
+  const pauseFramesRef = useRef(PAUSE_FRAMES_A.map(src => {
+    const img = new Image(); img.src = src; return img;
+  }));
+  const pauseFramesBRef = useRef(PAUSE_FRAMES_B.map(src => {
+    const img = new Image(); img.src = src; return img;
+  }));
   const accumRef   = useRef(0);
   const lastTsRef  = useRef(null);
   const pausedRef  = useRef(true);
@@ -229,18 +233,6 @@ function SandTimer() {
     const glassImgB = new Image();
     glassImgB.src = GLASS_B;
     glassRefB.current = glassImgB;
-
-    // Preload pause frame images (A and B orientation)
-    pauseFramesRef.current = PAUSE_FRAMES_A.map(src => {
-      const img = new Image();
-      img.src = src;
-      return img;
-    });
-    pauseFramesBRef.current = PAUSE_FRAMES_B.map(src => {
-      const img = new Image();
-      img.src = src;
-      return img;
-    });
 
     const buf = new Uint8ClampedArray(DISP_W * DISP_H * 4);
     const imgData = new ImageData(buf, DISP_W, DISP_H);
