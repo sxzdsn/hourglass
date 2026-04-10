@@ -97,6 +97,7 @@ function SandTimer() {
   const [paused, setPaused] = useState(true);
   const [unpausing, setUnpausing] = useState(false);
   const [resetting, setResetting] = useState(false);
+  const [hasStarted, setHasStarted] = useState(false);
   // Hourglass orientation: 'A' (default) or 'B' (after timer-complete reset)
   const [orientation, setOrientation] = useState('A');
   const [rotation, setRotation] = useState(0);
@@ -404,6 +405,7 @@ function SandTimer() {
   };
 
   const handlePlay = () => {
+    setHasStarted(true);
     setUnpausing(true);
   };
 
@@ -722,21 +724,33 @@ function SandTimer() {
       }}>
         {orientation}-Frame{String(paused || resetting ? pauseFrameDisplay : 1).padStart(2, "0")} {rotation}° {debugMode && `| Sand: ${timeLeft >= TOTAL_GRAINS ? 'top' : timeLeft <= 0 ? 'bottom' : 'mid'}`}
       </div>
-      <div style={{ display: "flex", gap: 20, marginTop: 20, padding: "0 20px", width: "100%", maxWidth: 600, boxSizing: "border-box" }}>
-        <button
-          onClick={paused ? handlePlay : handlePause}
-          disabled={unpausing || resetting}
-          style={btnStyle}
-        >
-          {paused ? "Play" : "Pause"}
-        </button>
-        <button
-          onClick={handleReset}
-          disabled={unpausing || resetting}
-          style={btnStyle}
-        >
-          Reset
-        </button>
+      <div style={{ display: "flex", gap: 20, marginTop: 40, padding: "0 20px", width: "100%", maxWidth: 600, boxSizing: "border-box" }}>
+        {!hasStarted ? (
+          <button
+            onClick={handlePlay}
+            disabled={unpausing || resetting}
+            style={btnStyle}
+          >
+            Start
+          </button>
+        ) : (
+          <>
+            <button
+              onClick={paused ? handlePlay : handlePause}
+              disabled={unpausing || resetting}
+              style={btnStyle}
+            >
+              {paused ? "Play" : "Pause"}
+            </button>
+            <button
+              onClick={handleReset}
+              disabled={unpausing || resetting}
+              style={btnStyle}
+            >
+              Reset
+            </button>
+          </>
+        )}
       </div>
       {/* Slow buttons - only visible when debug is on */}
       {debugMode && (
