@@ -609,23 +609,6 @@ function SandTimer() {
         background: "#c4b8a8", userSelect: "none",
       }}
     >
-      <button
-        onClick={() => { setDebugMode(d => !d); debugModeRef.current = !debugModeRef.current; }}
-        style={{
-          position: "absolute",
-          top: 10,
-          left: 10,
-          background: debugMode ? "#f0c848" : "#888",
-          border: "none",
-          padding: "6px 10px",
-          fontFamily: "monospace",
-          fontSize: 10,
-          fontWeight: "bold",
-          cursor: "pointer",
-        }}
-      >
-        DBG
-      </button>
       <style>{`
         @keyframes shake {
           0%, 100% { transform: translateY(0); }
@@ -717,14 +700,6 @@ function SandTimer() {
           imageRendering: "pixelated",
         }}
       />
-      <div style={{
-        fontFamily: "monospace",
-        fontSize: 10,
-        color: "#806040",
-        marginTop: 4,
-      }}>
-        {orientation}-Frame{String(paused || resetting ? pauseFrameDisplay : 1).padStart(2, "0")} {rotation}° {debugMode && `| Sand: ${timeLeft >= TOTAL_GRAINS ? 'top' : timeLeft <= 0 ? 'bottom' : 'mid'}`}
-      </div>
       <div style={{ display: "flex", gap: 20, marginTop: 40, padding: "0 20px", width: "100%", maxWidth: 600, boxSizing: "border-box" }}>
         {!hasStarted ? (
           <button
@@ -753,110 +728,6 @@ function SandTimer() {
           </>
         )}
       </div>
-      {/* Slow buttons - only visible when debug is on */}
-      {debugMode && (
-        <div style={{ display: "flex", gap: 20, marginTop: 8, padding: "0 20px", width: "100%", maxWidth: 600, boxSizing: "border-box" }}>
-          <button
-            onClick={paused ? handleSlowPlay : handleSlowPause}
-            disabled={unpausing || resetting}
-            style={{
-              ...btnStyle,
-              background: "#888",
-              borderBottom: "4px solid #666",
-              borderRight: "4px solid #666",
-              borderTop: "4px solid #aaa",
-              borderLeft: "4px solid #aaa",
-              height: 32,
-              fontSize: 10,
-            }}
-          >
-            Slow {paused ? "Play" : "Pause"}
-          </button>
-          <button
-            onClick={handleSlowReset}
-            disabled={unpausing || resetting}
-            style={{
-              ...btnStyle,
-              background: "#888",
-              borderBottom: "4px solid #666",
-              borderRight: "4px solid #666",
-              borderTop: "4px solid #aaa",
-              borderLeft: "4px solid #aaa",
-              height: 32,
-              fontSize: 10,
-            }}
-          >
-            Slow Reset
-          </button>
-        </div>
-      )}
-      {/* DEBUG MODE UI - only visible when debug is on */}
-      {debugMode && (
-        <>
-          <div style={{ display: "flex", gap: 8, marginTop: 16 }}>
-            {[[1,0],[2,1],[3,3],[4,4],[5,5]].map(([label, idx]) => (
-              <button
-                key={label}
-                onClick={() => { setFrozen(true); pauseFrameRef.current = idx; setPauseFrameDisplay(label); pausedRef.current = true; setPaused(true); setUnpausing(false); }}
-                style={{
-                  background: pauseFrameDisplay === label ? "#f0c848" : "#888",
-                  border: "none",
-                  padding: "8px 16px",
-                  fontFamily: "monospace",
-                  fontWeight: "bold",
-                  cursor: "pointer",
-                }}
-              >
-                F{label}
-              </button>
-            ))}
-          </div>
-          <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
-            <button
-              onClick={() => { accumRef.current = TOTAL_GRAINS - 30; }}
-              style={{
-                background: "#888",
-                border: "none",
-                padding: "6px 12px",
-                fontFamily: "monospace",
-                fontSize: 10,
-                fontWeight: "bold",
-                cursor: "pointer",
-              }}
-            >
-              Skip to 0:30
-            </button>
-            <button
-              onClick={() => { accumRef.current = TOTAL_GRAINS; }}
-              style={{
-                background: "#888",
-                border: "none",
-                padding: "6px 12px",
-                fontFamily: "monospace",
-                fontSize: 10,
-                fontWeight: "bold",
-                cursor: "pointer",
-              }}
-            >
-              Skip to 0:00
-            </button>
-            <button
-              onClick={() => { setShowDebugLines(d => !d); showDebugLinesRef.current = !showDebugLinesRef.current; }}
-              style={{
-                background: showDebugLines ? "#f0c848" : "#888",
-                border: "none",
-                padding: "6px 12px",
-                fontFamily: "monospace",
-                fontSize: 10,
-                fontWeight: "bold",
-                cursor: "pointer",
-              }}
-            >
-              Lines
-            </button>
-          </div>
-        </>
-      )}
     </div>
   );
 }
