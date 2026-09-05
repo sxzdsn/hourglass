@@ -200,6 +200,41 @@ test('front-view level follows remaining sand, not the hidden center funnel', ()
   }
 });
 
+test('the top row recedes from the center outward, leaving the edges until last', () => {
+  for (const width of [9, 10]) {
+    const simulation = {
+      width, firstRow: 0, neckRow: 3, lastRow: 5,
+      cells: new Uint8Array(width * 6),
+      mask: new Uint8Array(width * 6).fill(1),
+      bounds: Array.from({ length: 6 }, () => [0, width - 1]),
+    };
+    let previousRow = null;
+    let previousDistance = -1;
+    for (let remaining = width; remaining >= 0; remaining--) {
+      simulation.cells.fill(0);
+      simulation.cells.fill(3, 0, width + remaining);
+      const { upperFace, topSurface } = projectSandFront(simulation);
+      const row = Array.from(upperFace.slice(width, 2 * width));
+      assert.equal(upperFace.reduce((sum, value) => sum + value, 0), width + remaining);
+      assert.ok(upperFace.slice(2 * width, 3 * width).every(value => value === 1), 'surface dip exposed the buried bed');
+      assert.ok(Math.max(...topSurface) - Math.min(...topSurface) <= 1);
+      if (previousRow) {
+        const removed = [];
+        row.forEach((value, x) => {
+          assert.ok(value <= previousRow[x], 'a drained surface grain reappeared');
+          if (value < previousRow[x]) removed.push(x);
+        });
+        assert.equal(removed.length, 1);
+        const distance = Math.abs(removed[0] - (width - 1) / 2);
+        assert.ok(distance >= previousDistance, 'surface receded toward the center');
+        previousDistance = distance;
+      }
+      if (remaining >= 2) assert.equal(row[0] + row[width - 1], 2, 'edges drained too early');
+      previousRow = row;
+    }
+  }
+});
+
 test('buried grain tones do not make the internal flow visible through the face', () => {
   const simulation = createSimulation();
   simulation.advance(60);

@@ -34,8 +34,12 @@ function projectSandFront(simulation) {
   for (let y = neckRow - 1; y >= firstRow && remaining; y--) {
     const [left, right] = simulation.bounds[y];
     const count = Math.min(remaining, right - left + 1);
-    const start = left + Math.floor((right - left + 1 - count) / 2);
-    for (let x = start; x < start + count; x++) {
+    // Empty the middle of the surface row first, then recede toward the walls.
+    // Keep the dip one grain deep so the buried drain funnel stays occluded.
+    const gapStart = left + Math.ceil(count / 2);
+    const gapEnd = right - Math.floor(count / 2);
+    for (let x = left; x <= right; x++) {
+      if (x >= gapStart && x <= gapEnd) continue;
       upperFace[y * width + x] = 1;
       topSurface[x] = y;
     }
