@@ -14,13 +14,13 @@ const createSimulation = (options = {}) => SandPhysics.fromGlass({
   ...options,
 });
 const renderSource = source.slice(source.indexOf('const SAND_COLORS'), source.indexOf('const FONT'));
-const { drawSand, projectSandFront, sandGrainSize, sandFaceTexture } = vm.runInNewContext(
-  `const CX = 62; ${renderSource}; ({ drawSand, projectSandFront, sandGrainSize, sandFaceTexture })`,
+const { drawSand, projectSandFront, sandGrainSize, sandFaceTexture, sandStreamRange, sandFunnelProfile, sandFunnelShade } = vm.runInNewContext(
+  `const CX = 62; ${renderSource}; ({ drawSand, projectSandFront, sandGrainSize, sandFaceTexture, sandStreamRange, sandFunnelProfile, sandFunnelShade })`,
   { URLSearchParams },
 );
-function render(simulation) {
+function render(simulation, flowing = true) {
   const pixels = new Map();
-  drawSand(simulation, 0, 0, 1, (x, y, color) => pixels.set(y * 124 + x, color.join(',')));
+  drawSand(simulation, 0, 0, 1, (x, y, color) => pixels.set(y * 124 + x, color.join(',')), flowing);
   return pixels;
 }
 function inventory(simulation) {
@@ -101,9 +101,9 @@ test('pause closes the outlet but lets airborne grains land, without advancing t
     assert.equal(airborneCount(simulation), 0, 'grains remained suspended after pause');
     assert.equal(simulation.lowerSettled, true);
     assert.deepEqual(sandFaceTexture(simulation), upperTexture, 'upper texture shimmered while paused');
-    const rested = render(simulation);
+    const rested = render(simulation, false);
     simulation.settlePaused(3600);
-    assert.deepEqual(render(simulation), rested, 'settled sand kept moving during a long pause');
+    assert.deepEqual(render(simulation, false), rested, 'settled sand kept moving during a long pause');
     simulation.advance(13);
     const target = Math.floor(simulation.total * 13 / 118.5);
     assert.ok(Math.abs(simulation.released - target) <= 1, 'resume released a burst for paused time');
@@ -269,7 +269,7 @@ test('the page and offline cache request matching versioned physics and renderer
   for (const asset of [physics, renderer]) assert.ok(worker.includes(`"./${asset}"`));
 });
 
-test('both grain sizes render as solid pixel-art blocks', () => {
+test('both pile grain sizes remain solid pixel-art blocks beside the fine stream', () => {
   for (const grainSize of [2, 3]) {
     const simulation = createSimulation({ grainSize });
     assert.equal(simulation.grainSize, grainSize);
@@ -278,10 +278,14 @@ test('both grain sizes render as solid pixel-art blocks', () => {
     simulation.advance(60);
     const pixels = render(simulation);
     assert.ok(pixels.size > 0);
-    assert.equal(pixels.size % (grainSize * grainSize), 0);
+    const { upperFace, bottomSurface } = projectSandFront(simulation);
     pixels.forEach((_, index) => {
       const x = Math.floor(index % 124 / grainSize) * grainSize;
       const y = Math.floor(Math.floor(index / 124) / grainSize) * grainSize;
+      const cellX = x / grainSize;
+      const cellY = y / grainSize;
+      const face = cellY < simulation.neckRow ? upperFace[cellY * simulation.width + cellX] : cellY >= bottomSurface[cellX];
+      if (!face) return;
       const color = pixels.get(y * 124 + x);
       for (let dy = 0; dy < grainSize; dy++) {
         for (let dx = 0; dx < grainSize; dx++) {
@@ -389,7 +393,8 @@ test('draining only nudges a few front-facing grains while keeping the bed opaqu
     for (let x = 0; x < simulation.width; x++) {
       const index = y * simulation.width + x;
       if (!first.upperFace[index] || !second.upperFace[index]) continue;
-      if (y <= Math.max(first.topSurface[x], second.topSurface[x]) + 1) continue;
+      // The shallow bowl shading moves with the surface, not the buried bed.
+      if (y <= Math.max(first.topSurface[x], second.topSurface[x]) + Math.ceil(12 / simulation.grainSize)) continue;
       const pixel = y * 2 * 124 + x * 2;
       assert.ok(after.has(pixel), 'texture motion punched a hole in the front face');
       if (after.get(pixel) !== before.get(pixel)) {
@@ -460,8 +465,87 @@ test('projection is read-only and an isolated neck grain does not become a fake 
   const { bottomSurface } = projectSandFront(simulation);
   assert.equal(bottomSurface[center], simulation.lastRow + 1);
   const pixels = render(simulation);
-  assert.equal(pixels.size, 8, 'renderer fabricated a stream or pile between actual grains');
-  assert.ok(pixels.has((neckRow + 3) * 2 * 124 + center * 2));
+  assert.equal(pixels.size, 8, 'an isolated grain was extended into an established stream');
+  assert.ok(pixels.has((neckRow + 3) * 2 * 124 + 61));
+  assert.ok(pixels.has((neckRow + 3) * 2 * 124 + 62));
   assert.deepEqual(simulation.cells, snapshot);
   assert.equal(simulation.tick, tick);
+});
+
+test('established flow is a continuous two-pixel stream centered on the artwork', () => {
+  for (const grainSize of [2, 3]) {
+    const simulation = createSimulation({ grainSize });
+    for (const elapsed of [1, 10, 60, 110]) {
+      simulation.advance(elapsed);
+      const { bottomSurface } = projectSandFront(simulation);
+      const stream = sandStreamRange(simulation, bottomSurface, true);
+      assert.equal(stream.top, simulation.neckRow * grainSize);
+      assert.equal(stream.bottom, Math.max(bottomSurface[Math.floor(61 / grainSize)], bottomSurface[Math.floor(62 / grainSize)]) * grainSize);
+      const pixels = render(simulation);
+      const x = 61;
+      for (let y = stream.top; y < stream.bottom; y++) {
+        assert.ok(pixels.has(y * 124 + x), `stream gap at ${elapsed}s, row ${y}`);
+        assert.ok(pixels.has(y * 124 + x + 1), `stream narrowed at ${elapsed}s, row ${y}`);
+        for (const side of [-1, 2]) {
+          const cellX = Math.floor((x + side) / grainSize);
+          if (y < bottomSurface[cellX] * grainSize) {
+            assert.ok(!pixels.has(y * 124 + x + side), 'stream became a chunky drop');
+          }
+        }
+      }
+    }
+  }
+});
+
+test('stream grows at startup and its tail falls away on pause and completion', () => {
+  const simulation = createSimulation({ grainSize: 3 });
+  const range = flowing => sandStreamRange(simulation, projectSandFront(simulation).bottomSurface, flowing);
+  assert.equal(range(true), null, 'stream appeared before any sand was released');
+  while (!simulation.released) simulation.step();
+  assert.ok(range(true).bottom < simulation.lastRow * 3, 'startup stream teleported to the floor');
+  simulation.advance(12.5);
+  const released = simulation.released;
+  let top = range(false).top;
+  for (let frame = 0; frame < 120; frame++) {
+    simulation.settlePaused(1 / 60);
+    const stream = range(false);
+    if (stream) {
+      assert.ok(stream.top >= top, 'paused stream refilled from the neck');
+      top = stream.top;
+    }
+  }
+  assert.equal(range(false), null, 'stream lingered after the falling grains landed');
+  assert.equal(simulation.released, released);
+  simulation.advance(120);
+  assert.equal(range(true), null, 'stream remained after completion');
+  simulation.advance(0);
+  assert.equal(range(true), null, 'stream remained after reset');
+});
+
+test('the funnel is a shallow shaded bowl with a bright lip and recessed center', () => {
+  for (const grainSize of [2, 3]) {
+    const simulation = createSimulation({ grainSize });
+    let previousLevel = -1;
+    for (const elapsed of [0, 30, 60, 90]) {
+      simulation.advance(elapsed);
+      const { topSurface, upperFace } = projectSandFront(simulation);
+      const profile = sandFunnelProfile(simulation, topSurface);
+      assert.ok(profile);
+      assert.ok(profile.y >= previousLevel, 'bowl rose while sand drained');
+      previousLevel = profile.y;
+      assert.ok(profile.radiusY * grainSize <= 5, 'bowl became a deep cutaway');
+      assert.ok(sandFunnelShade(profile, profile.x, profile.y) < 0);
+      assert.ok(sandFunnelShade(profile, profile.x, profile.y + profile.radiusY * 0.9) > 0);
+      assert.equal(sandFunnelShade(profile, profile.x, profile.y + profile.radiusY + 1), null);
+      const pixels = render(simulation);
+      upperFace.forEach((filled, index) => {
+        if (!filled) return;
+        const x = index % simulation.width * grainSize;
+        const y = Math.floor(index / simulation.width) * grainSize;
+        assert.ok(pixels.has(y * 124 + x), 'funnel shading opened a hole in the bed');
+      });
+    }
+    simulation.advance(120);
+    assert.equal(sandFunnelProfile(simulation, projectSandFront(simulation).topSurface), null);
+  }
 });

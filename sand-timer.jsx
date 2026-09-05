@@ -101,10 +101,70 @@ function projectSandFront(simulation) {
   return { upperFace, topSurface, bottomSurface };
 }
 
-function drawSand(simulation, topOffset, bottomOffset, scale, putPixel) {
+function sandStreamRange(simulation, bottomSurface, flowing) {
+  const { cells, width, neckRow, lastRow, grainSize = 1 } = simulation;
+  let first = lastRow + 1;
+  let last = neckRow - 1;
+  let airborne = 0;
+  for (let y = neckRow; y <= lastRow; y++) {
+    for (let x = 0; x < width; x++) {
+      if (!cells[y * width + x] || y >= bottomSurface[x]) continue;
+      first = Math.min(first, y);
+      last = Math.max(last, y);
+      airborne++;
+    }
+  }
+  const feeding = flowing && simulation.released > 0 && simulation.released < simulation.total;
+  if (!feeding && !airborne) return null;
+  // A visual projection of the fine stream, not extra simulated sand. Bridge
+  // the coarse grains once flow reaches the pile; preserve the falling front
+  // at startup and let the trailing end clear the neck on pause/completion.
+  const top = feeding ? neckRow : first;
+  const landing = Math.max(bottomSurface[Math.floor((CX - 1) / grainSize)], bottomSurface[Math.floor(CX / grainSize)]);
+  const bottom = simulation.released > airborne ? landing : last + 1;
+  return { top: top * grainSize, bottom: bottom * grainSize };
+}
+
+function sandFunnelProfile(simulation, topSurface) {
+  const row = Math.min(...topSurface);
+  if (row >= simulation.neckRow - 2) return null;
+  const [left, right] = simulation.bounds[row];
+  const radiusX = (right - left) / 2 - 0.5;
+  if (radiusX < 2) return null;
+  const radiusY = Math.min(5 / simulation.grainSize, (simulation.neckRow - row - 1) / 2);
+  return { x: (left + right) / 2, y: row + radiusY - 0.5, radiusX, radiusY };
+}
+
+function sandFunnelShade(profile, x, y) {
+  if (!profile) return null;
+  const u = (x - profile.x) / profile.radiusX;
+  const v = (y - profile.y) / profile.radiusY;
+  const distance = u * u + v * v;
+  if (distance > 1) return null;
+  // A shallow elliptical bowl: lit near lip, darker recessed center. Only
+  // shade the opaque sand; never cut a hole or expose the interior drain path.
+  if (distance > 0.55) return v > 0 ? 1.4 : 0.65;
+  return -1.25 + distance * 0.5;
+}
+
+function drawSand(simulation, topOffset, bottomOffset, scale, putPixel, flowing = true) {
   const { cells, width, neckRow, lastRow, grainSize = 1 } = simulation;
   const { upperFace, topSurface, bottomSurface } = projectSandFront(simulation);
   const faceTexture = sandFaceTexture(simulation);
+  const funnel = sandFunnelProfile(simulation, topSurface);
+  const stream = sandStreamRange(simulation, bottomSurface, flowing);
+  if (stream) {
+    // Center on the artwork, not the rounded-down simulation grid.
+    const x = CX - 1;
+    const phase = simulation.tick + simulation.settlingTick;
+    for (let y = stream.top; y < stream.bottom; y++) {
+      const yOut = Math.round(198 + (y - 198) * scale) + bottomOffset;
+      // A quiet, continuous two-pixel strand instead of bright blinking drops.
+      const tone = simulation.noise(Math.floor((y - phase) / 6)) > 0.8 ? 5 : 4;
+      putPixel(x, yOut, SAND_COLORS[tone]);
+      putPixel(x + 1, yOut, SAND_COLORS[tone]);
+    }
+  }
   for (let y = simulation.firstRow; y <= lastRow; y++) {
     const [left, right] = simulation.bounds[y];
     const upper = y < neckRow;
@@ -115,16 +175,16 @@ function drawSand(simulation, topOffset, bottomOffset, scale, putPixel) {
     for (let x = left; x <= right; x++) {
       const index = y * width + x;
       const face = upper ? upperFace[index] : y >= bottomSurface[x];
-      const falling = !upper && !face && cells[index];
-      if (!face && !falling) continue;
-      // Only exposed falling grains carry their actual particle tones. The
-      // opaque upper facade gets subtle local shifts without showing the core.
+      if (!face) continue;
+      // Keep the chunky, opaque piles; the fine stream is drawn separately.
       const noise = simulation.noise(index);
-      const tone = falling ? cells[index] : upper ? faceTexture[index] : noise < 0.12 ? 1 : noise > 0.9 ? 5 : noise > 0.6 ? 4 : 3;
+      const tone = upper ? faceTexture[index] : noise < 0.12 ? 1 : noise > 0.9 ? 5 : noise > 0.6 ? 4 : 3;
       const depth = Math.max(0, y * grainSize - (upper ? 20 : 180));
       const shade = 4.4 - Math.min(depth / 120, 1.2) - (x * grainSize - CX) / 100;
       const rim = face && y === surface[x] ? 0.8 : 0;
-      const color = falling ? 5 + tone % 3 : Math.round(shade + (tone - 3) * 0.65 + rim);
+      const bowl = upper ? sandFunnelShade(funnel, x, y) : null;
+      const facet = upper ? (x * grainSize > CX + 3 ? -0.8 : x * grainSize < CX - 3 ? 0.25 : 0) : 0;
+      const color = Math.round(shade + (tone - 3) * (bowl === null ? 0.65 : 0.35) + (bowl === null ? rim + facet : bowl));
       for (let dy = 0; dy < grainSize; dy++) {
         for (let dx = 0; dx < grainSize; dx++) {
           putPixel(x * grainSize + dx, yOut + dy, SAND_COLORS[Math.max(0, Math.min(7, color))]);
@@ -346,7 +406,7 @@ function SandTimer() {
       const topCenter = 70;  // center of top bulb
       const botCenter = 198; // center of bottom bulb
 
-      const [topSurface, bottomSurface] = drawSand(simulation, topOff, botOff, scale, sp);
+      const [topSurface, bottomSurface] = drawSand(simulation, topOff, botOff, scale, sp, !pausedRef.current && !resettingRef.current);
 
       // ── Debug: boundary strokes (red=top, green=bottom) ─────────────────────
       if (showDebugLinesRef.current) {
