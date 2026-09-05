@@ -1,7 +1,8 @@
-const CACHE = "sand-timer-v3";
+const CACHE = "sand-timer-v8";
 const ASSETS = [
   "./index.html",
   "./sand-timer.jsx",
+  "./sand-physics.js",
   "./pause-frames.js",
   "./icon-192.png",
   "./icon-512.png",

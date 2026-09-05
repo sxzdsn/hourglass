@@ -14,49 +14,84 @@ const TOP_END   = 128;
 const BOT_START = 130;
 const BOT_END   = 267;
 
-const TC_ROWS = [];
-for (let r = TOP_END; r >= 12; r--) {
-  const b = ROW_BOUNDS[r];
-  TC_ROWS.push(b ? b[1] - b[0] : 0);
-}
-const TOTAL_A_TOP = TC_ROWS.reduce((a, b) => a + b, 0);
+// Warm pixel-art tones. Physics is a section through the sand; the camera is
+// head-on, outside the glass. Buried grains must not be drawn as exposed grains.
+const SAND_COLORS = [
+  [151, 108, 43], [172, 127, 48], [191, 146, 56], [207, 163, 66],
+  [221, 179, 80], [231, 193, 100], [241, 207, 124], [250, 225, 156],
+];
+function projectSandFront(simulation) {
+  const { cells, mask, width, firstRow, neckRow, lastRow } = simulation;
+  const upperFace = new Uint8Array(cells.length);
+  const topSurface = new Int16Array(width).fill(lastRow + 1);
+  const bottomSurface = new Int16Array(width).fill(lastRow + 1);
+  let remaining = 0;
+  for (let i = firstRow * width; i < neckRow * width; i++) if (cells[i]) remaining++;
 
-const BC_ROWS = [];
-for (let r = BOT_END; r >= BOT_START; r--) {
-  const b = ROW_BOUNDS[r];
-  BC_ROWS.push(b ? b[1] - b[0] : 0);
-}
-const TOTAL_A_BOT = BC_ROWS.reduce((a, b) => a + b, 0);
-
-function solveTopH(frac) {
-  if (frac <= 0) return 0;
-  if (frac >= 1) return TC_ROWS.length;
-  const target = frac * TOTAL_A_TOP;
-  let acc = 0;
-  for (let i = 0; i < TC_ROWS.length; i++) {
-    acc += TC_ROWS[i];
-    if (acc >= target) return i + 1;
+  // A concave drain funnel lies BEHIND the near-side sand. Project an opaque
+  // front silhouette from the remaining grain count, not the internal V-shaped
+  // section. This is a 2D front-view approximation, not a 3D particle solver.
+  for (let y = neckRow - 1; y >= firstRow && remaining; y--) {
+    const [left, right] = simulation.bounds[y];
+    const count = Math.min(remaining, right - left + 1);
+    const start = left + Math.floor((right - left + 1 - count) / 2);
+    for (let x = start; x < start + count; x++) {
+      upperFace[y * width + x] = 1;
+      topSurface[x] = y;
+    }
+    remaining -= count;
   }
-  return TC_ROWS.length;
-}
-function solveBotH(frac) {
-  if (frac <= 0) return 0;
-  if (frac >= 1) return BC_ROWS.length;
-  const target = frac * TOTAL_A_BOT;
-  let acc = 0;
-  for (let i = 0; i < BC_ROWS.length; i++) {
-    acc += BC_ROWS[i];
-    if (acc >= target) return i + 1;
+
+  // Find the supported lower pile from the floor upward. A passing grain in
+  // the stream must not establish a false pile surface high in the chamber.
+  const supported = new Uint8Array(cells.length);
+  for (let y = lastRow; y >= neckRow; y--) {
+    const [left, right] = simulation.bounds[y];
+    for (let x = left; x <= right; x++) {
+      const index = y * width + x;
+      const below = index + width;
+      if (cells[index] && (!mask[below] || supported[below] || supported[below - 1] || supported[below + 1])) {
+        supported[index] = 1;
+        bottomSurface[x] = y;
+      }
+    }
   }
-  return BC_ROWS.length;
+  return { upperFace, topSurface, bottomSurface };
 }
 
-const SA = [240, 200, 40];
-const SB = [210, 165, 20];
-const SC = [175, 128, 10];
-const SD = [145, 100,  5];
-const STREAM = [255, 240, 120];
-const TCOL = [80, 60, 10];
+function drawSand(simulation, topOffset, bottomOffset, scale, putPixel) {
+  const { cells, width, neckRow, lastRow, grainSize = 1 } = simulation;
+  const { upperFace, topSurface, bottomSurface } = projectSandFront(simulation);
+  for (let y = simulation.firstRow; y <= lastRow; y++) {
+    const [left, right] = simulation.bounds[y];
+    const upper = y < neckRow;
+    const surface = upper ? topSurface : bottomSurface;
+    const center = upper ? 70 : 198;
+    const offset = upper ? topOffset : bottomOffset;
+    const yOut = Math.round(center + (y * grainSize - center) * scale) + offset;
+    for (let x = left; x <= right; x++) {
+      const index = y * width + x;
+      const face = upper ? upperFace[index] : y >= bottomSurface[x];
+      const falling = !upper && !face && cells[index];
+      if (!face && !falling) continue;
+      // The face texture belongs to the visible facade, not to moving grains
+      // inside the section. Otherwise the hidden core reads as a conveyor belt
+      // against the glass. Only exposed falling grains carry their own tones.
+      const noise = simulation.noise(index);
+      const tone = falling ? cells[index] : noise < 0.12 ? 1 : noise > 0.9 ? 5 : noise > 0.6 ? 4 : 3;
+      const depth = Math.max(0, y * grainSize - (upper ? 20 : 180));
+      const shade = 4.4 - Math.min(depth / 120, 1.2) - (x * grainSize - CX) / 100;
+      const rim = face && y === surface[x] ? 0.8 : 0;
+      const color = falling ? 5 + tone % 3 : Math.round(shade + (tone - 3) * 0.65 + rim);
+      for (let dy = 0; dy < grainSize; dy++) {
+        for (let dx = 0; dx < grainSize; dx++) {
+          putPixel(x * grainSize + dx, yOut + dy, SAND_COLORS[Math.max(0, Math.min(7, color))]);
+        }
+      }
+    }
+  }
+  return [topSurface.map(y => y * grainSize), bottomSurface.map(y => y * grainSize)];
+}
 
 const FONT = [
   [0b111,0b101,0b101,0b101,0b111],
@@ -237,6 +272,10 @@ function SandTimer() {
 
     const buf = new Uint8ClampedArray(DISP_W * DISP_H * 4);
     const imgData = new ImageData(buf, DISP_W, DISP_H);
+    const simulation = SandPhysics.fromGlass({
+      width: DISP_W, height: DISP_H, rows: GLASS_ROWS,
+      neckRow: NECK_ROW, duration: TOTAL_GRAINS,
+    });
     let rafId;
 
     const sp = (x, y, c) => {
@@ -244,45 +283,12 @@ function SandTimer() {
       const i = (y * DISP_W + x) << 2;
       buf[i]=c[0]; buf[i+1]=c[1]; buf[i+2]=c[2]; buf[i+3]=255;
     };
-    const DSCALE = 3; // digit pixel scale
-    const drawDigit = (d, ox, oy, c) => {
-      for (let r=0;r<5;r++)
-        for (let col=0;col<3;col++)
-          if (FONT[d][r] & (4>>col))
-            for (let dy=0;dy<DSCALE;dy++)
-              for (let dx=0;dx<DSCALE;dx++)
-                sp(ox+col*DSCALE+dx, oy+r*DSCALE+dy, c);
-    };
-    const drawTimer = (secs) => {
-      const m = Math.floor(secs/60), s = Math.floor(secs%60);
-      const charW = 3*DSCALE, gap = DSCALE, colonW = gap;
-      const fullW = charW + colonW + charW + gap + charW;
-      const sx = CX - Math.floor(fullW / 2);
-      const ty = BOT_END + 45;
-      const done = secs <= 0;
-      const c = done && Math.floor(Date.now()/500)%2===0 ? SA : TCOL;
-      drawDigit(m, sx, ty, c);
-      const cx2 = sx + charW + Math.floor(colonW/2);
-      for (let dy=0;dy<DSCALE;dy++) { sp(cx2, ty+DSCALE+dy, c); sp(cx2, ty+3*DSCALE+dy, c); }
-      drawDigit(Math.floor(s/10), sx + charW + colonW + gap, ty, c);
-      drawDigit(s%10, sx + charW + colonW + gap + charW + gap, ty, c);
-    };
-
     const frame = (ts) => {
       if (lastTsRef.current !== null && !pausedRef.current)
         accumRef.current += (ts - lastTsRef.current) / 1000;
       lastTsRef.current = ts;
       const elapsed = Math.min(accumRef.current, TOTAL_GRAINS);
-      const grains  = Math.min(TOTAL_GRAINS, Math.floor(elapsed));
-      const isDone  = grains >= TOTAL_GRAINS;
-      const SAND_SCALE = 0.9; // 90% sand volume
-      const topFrac = ((TOTAL_GRAINS - grains) / TOTAL_GRAINS) * SAND_SCALE;
-      const botFrac = (grains / TOTAL_GRAINS) * SAND_SCALE;
-
-      const topH = Math.round(solveTopH(topFrac));
-      const botH = Math.round(solveBotH(botFrac));
-      const topSandRow = TOP_END - topH + 1;
-      const botSandRow = BOT_END - botH + 1;
+      simulation.advance(elapsed);
 
       // Fill background
       for (let i=0; i<buf.length; i+=4) {
@@ -296,61 +302,12 @@ function SandTimer() {
       const topCenter = 70;  // center of top bulb
       const botCenter = 198; // center of bottom bulb
 
-      // ── Top sand ───────────────────────────────────────────────────────────
-      const rowAtG = g => TOP_END - Math.round(solveTopH((TOTAL_GRAINS - Math.min(g, TOTAL_GRAINS)) / TOTAL_GRAINS)) + 1;
-      let rowStart = elapsed, rowEnd = elapsed + 1;
-      for (let g=Math.floor(elapsed); g>=0; g--) { if (rowAtG(g) !== topSandRow) { rowStart=g; break; } rowStart=g; }
-      for (let g=Math.ceil(elapsed); g<=TOTAL_GRAINS; g++) { if (rowAtG(g) !== topSandRow) { rowEnd=g; break; } }
-      const density = 1 - Math.max(0, Math.min(1, (elapsed - rowStart) / Math.max(1, rowEnd - rowStart)));
-
-      for (let row = topSandRow; row <= TOP_END; row++) {
-        const b = ROW_BOUNDS[row]; if (!b) continue;
-        const [l, ri] = b;
-        const depth = (row - topSandRow) / Math.max(1, TOP_END - topSandRow);
-        const yOut = Math.round(topCenter + (row - topCenter) * scale) + topOff;
-        for (let x=l; x<=ri; x++) {
-          if (row === topSandRow) {
-            if (((x*2971 + row*1013 + 7) % 100) / 100 >= density) continue;
-          }
-          sp(x, yOut, (x+row)%2===0 ? (depth>0.65?SB:SA) : (depth>0.45?SC:SB));
-        }
-      }
-      // Funnel fill neck top
-      for (let row=TOP_END+1; row<NECK_ROW; row++) {
-        const b = ROW_BOUNDS[row]; if (!b) continue;
-        const [l, ri] = b;
-        const yOut = Math.round(topCenter + (row - topCenter) * scale) + topOff;
-        for (let x=l; x<=ri; x++) sp(x, yOut, SB);
-      }
-
-      // ── Bottom sand ────────────────────────────────────────────────────────
-      const botRowAtG = g => BOT_END - Math.round(solveBotH(Math.min(g, TOTAL_GRAINS) / TOTAL_GRAINS)) + 1;
-      let botRowStart=elapsed, botRowEnd=elapsed+1;
-      for (let g=Math.floor(elapsed); g>=0; g--) { if (botRowAtG(g)!==botSandRow) { botRowStart=g+1; break; } botRowStart=g; }
-      for (let g=Math.ceil(elapsed); g<=TOTAL_GRAINS; g++) { if (botRowAtG(g)!==botSandRow) { botRowEnd=g; break; } }
-      const botDensity = Math.max(0, Math.min(1, (elapsed - botRowStart) / Math.max(1, botRowEnd - botRowStart)));
-
-      for (let row=NECK_ROW+1; row<BOT_START; row++) {
-        const b = ROW_BOUNDS[row]; if (!b) continue;
-        const [l, ri] = b;
-        const yOut = Math.round(botCenter + (row - botCenter) * scale) + botOff;
-        for (let x=l; x<=ri; x++) sp(x, yOut, SB);
-      }
-      for (let row=botSandRow; row<=BOT_END; row++) {
-        const b = ROW_BOUNDS[row]; if (!b) continue;
-        const [l, ri] = b;
-        const depth = (row - botSandRow) / Math.max(1, BOT_END - botSandRow);
-        const yOut = Math.round(botCenter + (row - botCenter) * scale) + botOff;
-        for (let x=l; x<=ri; x++) {
-          if (row === botSandRow) {
-            if (((x*2971 + row*1013 + 7) % 100) / 100 >= botDensity) continue;
-          }
-          sp(x, yOut, (x+row)%2===0 ? (depth>0.65?SC:SB) : (depth>0.45?SB:SA));
-        }
-      }
+      const [topSurface, bottomSurface] = drawSand(simulation, topOff, botOff, scale, sp);
 
       // ── Debug: boundary strokes (red=top, green=bottom) ─────────────────────
       if (showDebugLinesRef.current) {
+        const topSandRow = Math.min(...topSurface);
+        const botSandRow = Math.min(...bottomSurface);
         // Top sand top boundary (transformed topSandRow)
         const topTopY = Math.round(topCenter + (topSandRow - topCenter) * scale) + topOff;
         for (let x = 0; x < DISP_W; x++) sp(x, topTopY, DEBUG_RED);
@@ -363,26 +320,6 @@ function SandTimer() {
         // Bottom sand bottom boundary (transformed BOT_END)
         const botBotY = Math.round(botCenter + (BOT_END - botCenter) * scale) + botOff;
         for (let x = 0; x < DISP_W; x++) sp(x, botBotY, DEBUG_GREEN);
-      }
-
-      // ── Trickle ────────────────────────────────────────────────────────────
-      if (!isDone && !pausedRef.current && !resettingRef.current) {
-        const scroll = Math.floor(Date.now()/50) % 5;
-        for (let y=NECK_ROW+1; y<=botSandRow-1; y++) {
-          const phase = (y - scroll + 500) % 5;
-          if (phase >= 3) continue;
-          sp(CX, y, phase===0 ? STREAM : phase===1 ? SA : SB);
-        }
-      }
-
-      if (isDone && !pausedRef.current) {
-        const t = Math.floor(Date.now()/200);
-        const mid = Math.round((NECK_ROW + botSandRow) / 2);
-        [[CX-6,mid-8],[CX,mid-12],[CX+6,mid-8],[CX-3,mid],[CX+3,mid]]
-          .forEach(([x,y],i) => {
-            if ((t+i)%3===0) sp(x,y,STREAM);
-            else if ((t+i)%3===1) sp(x,y,SA);
-          });
       }
 
       setTimeLeft(Math.max(0, TOTAL_GRAINS - elapsed));
