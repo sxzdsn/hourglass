@@ -1,3 +1,17 @@
+About:
+This is my first vibecoded project with claude code and codex, nanobanana for assets. Simple little project to play to see what we can do now with this new technology.
+
+I've been weirdly missing the messy old school design prototyping (<2024) method of linking up static frames together with blue spaghetti. Mapping out png sequences comes pretty close:
+
+
+
+
+
+
+
+--------------------------------------------
+Codex Generated notes below:
+
 # Hourglass
 
 A two-minute pixel-art sand timer with cellular-automaton sand physics.
