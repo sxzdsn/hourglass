@@ -25,6 +25,39 @@ function sandGrainSize(search) {
   return new URLSearchParams(search).get("grain") === "2" ? 2 : 3;
 }
 
+const SAND_FACE_TEXTURES = new WeakMap();
+function sandFaceTexture(simulation) {
+  const { width, firstRow, neckRow, center, grainSize = 1, released } = simulation;
+  let texture = SAND_FACE_TEXTURES.get(simulation);
+  if (!texture || released < texture.released) {
+    const tones = new Uint8Array(simulation.cells.length);
+    for (let i = 0; i < tones.length; i++) {
+      const noise = simulation.noise(i);
+      tones[i] = noise < 0.12 ? 1 : noise > 0.9 ? 5 : noise > 0.6 ? 4 : 3;
+    }
+    texture = { tones, released: 0 };
+    SAND_FACE_TEXTURES.set(simulation, texture);
+  }
+  // Tiny neighboring texture exchanges suggest a shifting front layer. Most
+  // happen within 30 artwork pixels of the mouth, with occasional motion above.
+  // Drive them by actual outflow: no idle shimmer, paused motion, or frame-rate
+  // dependence. These are surface details, not exposed internal particle paths.
+  while (texture.released < released) {
+    const event = ++texture.released;
+    const span = Math.min(neckRow - firstRow - 1, event % 5 ? Math.ceil(30 / grainSize) : neckRow - firstRow - 1);
+    if (span < 1) continue;
+    const y = neckRow - 2 - Math.floor(simulation.noise(event * 719) * span);
+    const [left, right] = simulation.bounds[y];
+    const [nextLeft, nextRight] = simulation.bounds[y + 1];
+    const x = left + Math.floor(simulation.noise(event * 977) * (right - left + 1));
+    const nextX = Math.max(nextLeft, Math.min(nextRight, x + Math.sign(center - x)));
+    const from = y * width + x;
+    const to = (y + 1) * width + nextX;
+    [texture.tones[from], texture.tones[to]] = [texture.tones[to], texture.tones[from]];
+  }
+  return texture.tones;
+}
+
 function projectSandFront(simulation) {
   const { cells, mask, width, firstRow, neckRow, lastRow } = simulation;
   const upperFace = new Uint8Array(cells.length);
@@ -71,6 +104,7 @@ function projectSandFront(simulation) {
 function drawSand(simulation, topOffset, bottomOffset, scale, putPixel) {
   const { cells, width, neckRow, lastRow, grainSize = 1 } = simulation;
   const { upperFace, topSurface, bottomSurface } = projectSandFront(simulation);
+  const faceTexture = sandFaceTexture(simulation);
   for (let y = simulation.firstRow; y <= lastRow; y++) {
     const [left, right] = simulation.bounds[y];
     const upper = y < neckRow;
@@ -83,11 +117,10 @@ function drawSand(simulation, topOffset, bottomOffset, scale, putPixel) {
       const face = upper ? upperFace[index] : y >= bottomSurface[x];
       const falling = !upper && !face && cells[index];
       if (!face && !falling) continue;
-      // The face texture belongs to the visible facade, not to moving grains
-      // inside the section. Otherwise the hidden core reads as a conveyor belt
-      // against the glass. Only exposed falling grains carry their own tones.
+      // Only exposed falling grains carry their actual particle tones. The
+      // opaque upper facade gets subtle local shifts without showing the core.
       const noise = simulation.noise(index);
-      const tone = falling ? cells[index] : noise < 0.12 ? 1 : noise > 0.9 ? 5 : noise > 0.6 ? 4 : 3;
+      const tone = falling ? cells[index] : upper ? faceTexture[index] : noise < 0.12 ? 1 : noise > 0.9 ? 5 : noise > 0.6 ? 4 : 3;
       const depth = Math.max(0, y * grainSize - (upper ? 20 : 180));
       const shade = 4.4 - Math.min(depth / 120, 1.2) - (x * grainSize - CX) / 100;
       const rim = face && y === surface[x] ? 0.8 : 0;
@@ -294,11 +327,12 @@ function SandTimer() {
       buf[i]=c[0]; buf[i+1]=c[1]; buf[i+2]=c[2]; buf[i+3]=255;
     };
     const frame = (ts) => {
-      if (lastTsRef.current !== null && !pausedRef.current)
-        accumRef.current += (ts - lastTsRef.current) / 1000;
+      const delta = lastTsRef.current === null ? 0 : Math.max(0, (ts - lastTsRef.current) / 1000);
+      if (!pausedRef.current) accumRef.current += delta;
       lastTsRef.current = ts;
       const elapsed = Math.min(accumRef.current, TOTAL_GRAINS);
       simulation.advance(elapsed);
+      if (pausedRef.current && !resettingRef.current) simulation.settlePaused(delta);
 
       // Fill background
       for (let i=0; i<buf.length; i+=4) {

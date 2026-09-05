@@ -85,6 +85,9 @@ class SandPhysics {
     this.velocity.fill(0);
     this.tick = 0;
     this.released = 0;
+    this.settlingTick = 0;
+    this.settlingRemainder = 0;
+    this.lowerSettled = true;
     let remaining = this.total;
     for (let y = this.neckRow - 1; y >= this.firstRow && remaining; y--) {
       const [left, right] = this.bounds[y];
@@ -138,6 +141,7 @@ class SandPhysics {
         if (mask[destination] && !cells[destination]) {
           this.moveGrain(outlet, destination);
           this.released++;
+          this.lowerSettled = false;
           break;
         }
       }
@@ -176,12 +180,20 @@ class SandPhysics {
 
   step() {
     this.tick++;
+    this.settlingRemainder = 0;
     // Leave time for the final grains to reach the pile before 0:00.
     const releaseDuration = Math.max(this.duration * 0.5, this.duration - 1.5);
     const target = Math.floor(this.total * Math.min(1, this.tick / this.stepsPerSecond / releaseDuration));
+    this.settleLowerBed();
+    this.drainUpperBed(target);
+  }
+
+  settleLowerBed() {
     const { width, cells, previous, velocity, mask, neckRow } = this;
     previous.set(cells);
-    const direction = this.tick % 2 ? 1 : -1;
+    const phase = this.tick + this.settlingTick;
+    const direction = phase % 2 ? 1 : -1;
+    let moved = false;
     // Free-falling grains and the receiving pile keep their local dynamics.
     // The packed upper reservoir is settled separately from its outlet up.
     for (let y = this.lastRow; y >= neckRow; y--) {
@@ -211,7 +223,7 @@ class SandPhysics {
         if (destination === index) {
           // Vary diagonal preference and alternate scan order to avoid a
           // permanent left/right bias as small avalanches cross the surface.
-          const side = this.noise(index + this.tick * 131) < 0.5 ? -1 : 1;
+          const side = this.noise(index + phase * 131) < 0.5 ? -1 : 1;
           for (const dx of [side, -side]) {
             const candidate = index + width + dx;
             if (!mask[candidate] || previous[candidate] || cells[candidate]) continue;
@@ -238,6 +250,7 @@ class SandPhysics {
           }
         }
         if (destination !== index) {
+          moved = true;
           cells[destination] = cells[index];
           velocity[destination] = nextY > y + 1 ? speed : 1;
           cells[index] = 0;
@@ -247,7 +260,20 @@ class SandPhysics {
         }
       }
     }
-    this.drainUpperBed(target);
+    this.lowerSettled = !moved;
+  }
+
+  settlePaused(deltaSeconds) {
+    // Pausing closes the outlet, not gravity. Keep the timer/release clock and
+    // upper bed untouched while in-flight grains land and the lower pile rests.
+    if (this.lowerSettled) return;
+    this.settlingRemainder += Math.max(0, deltaSeconds);
+    const steps = Math.floor(this.settlingRemainder * this.stepsPerSecond + 0.000001);
+    this.settlingRemainder = Math.max(0, this.settlingRemainder - steps / this.stepsPerSecond);
+    for (let i = 0; i < steps && !this.lowerSettled; i++) {
+      this.settlingTick++;
+      this.settleLowerBed();
+    }
   }
 
   advance(elapsed) {

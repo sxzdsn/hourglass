@@ -14,8 +14,8 @@ const createSimulation = (options = {}) => SandPhysics.fromGlass({
   ...options,
 });
 const renderSource = source.slice(source.indexOf('const SAND_COLORS'), source.indexOf('const FONT'));
-const { drawSand, projectSandFront, sandGrainSize } = vm.runInNewContext(
-  `const CX = 62; ${renderSource}; ({ drawSand, projectSandFront, sandGrainSize })`,
+const { drawSand, projectSandFront, sandGrainSize, sandFaceTexture } = vm.runInNewContext(
+  `const CX = 62; ${renderSource}; ({ drawSand, projectSandFront, sandGrainSize, sandFaceTexture })`,
   { URLSearchParams },
 );
 function render(simulation) {
@@ -33,6 +33,17 @@ function inventory(simulation) {
     if (index < simulation.neckRow * simulation.width) upper++;
   });
   return { tones, upper };
+}
+function airborneCount(simulation) {
+  const { width, neckRow, lastRow, cells } = simulation;
+  const { bottomSurface } = projectSandFront(simulation);
+  let count = 0;
+  for (let y = neckRow; y <= lastRow; y++) {
+    for (let x = 0; x < width; x++) {
+      if (cells[y * width + x] && y < bottomSurface[x]) count++;
+    }
+  }
+  return count;
 }
 
 test('conserves every grain and its tone for the full timer, then settles', () => {
@@ -56,7 +67,7 @@ test('conserves every grain and its tone for the full timer, then settles', () =
   assert.deepEqual(simulation.cells, completed, 'pile was still falling at completion');
 });
 
-test('pause freezes grain positions and momentum, then resumes deterministically', () => {
+test('repeating the same elapsed time does not advance the release clock', () => {
   const simulation = createSimulation();
   simulation.advance(12.5);
   const cells = simulation.cells.slice();
@@ -68,6 +79,75 @@ test('pause freezes grain positions and momentum, then resumes deterministically
   const uninterrupted = createSimulation();
   uninterrupted.advance(13);
   assert.deepEqual(simulation.cells, uninterrupted.cells);
+});
+
+test('pause closes the outlet but lets airborne grains land, without advancing the timer', () => {
+  for (const grainSize of [2, 3]) {
+    const simulation = createSimulation({ grainSize });
+    simulation.advance(12.5);
+    const before = inventory(simulation);
+    const cells = simulation.cells.slice();
+    const upperEnd = simulation.neckRow * simulation.width;
+    const tick = simulation.tick;
+    const released = simulation.released;
+    const upperTexture = sandFaceTexture(simulation).slice();
+    assert.ok(airborneCount(simulation) > 0, 'pause fixture has no in-flight grains');
+    for (let frame = 0; frame < 120; frame++) simulation.settlePaused(1 / 60);
+    assert.equal(simulation.tick, tick, 'pause advanced the countdown clock');
+    assert.equal(simulation.released, released, 'new grains left the neck during pause');
+    assert.deepEqual(simulation.cells.slice(0, upperEnd), cells.slice(0, upperEnd));
+    assert.deepEqual(inventory(simulation), before);
+    assert.notDeepEqual(simulation.cells, cells, 'falling grains stayed frozen');
+    assert.equal(airborneCount(simulation), 0, 'grains remained suspended after pause');
+    assert.equal(simulation.lowerSettled, true);
+    assert.deepEqual(sandFaceTexture(simulation), upperTexture, 'upper texture shimmered while paused');
+    const rested = render(simulation);
+    simulation.settlePaused(3600);
+    assert.deepEqual(render(simulation), rested, 'settled sand kept moving during a long pause');
+    simulation.advance(13);
+    const target = Math.floor(simulation.total * 13 / 118.5);
+    assert.ok(Math.abs(simulation.released - target) <= 1, 'resume released a burst for paused time');
+    assert.deepEqual(inventory(simulation).tones, before.tones);
+    simulation.advance(0);
+    assert.equal(simulation.settlingTick, 0);
+    assert.equal(simulation.settlingRemainder, 0);
+    assert.deepEqual(simulation.cells, createSimulation({ grainSize }).cells);
+  }
+});
+
+test('paused settling and resume are identical across frame rates and a background gap', () => {
+  for (const grainSize of [2, 3]) {
+    const expected = createSimulation({ grainSize });
+    expected.advance(12.5);
+    expected.settlePaused(2);
+    expected.advance(13);
+    for (const fps of [30, 60, 144]) {
+      const simulation = createSimulation({ grainSize });
+      simulation.advance(12.5);
+      for (let frame = 0; frame < fps * 2; frame++) simulation.settlePaused(1 / fps);
+      simulation.advance(13);
+      assert.deepEqual(simulation.cells, expected.cells);
+      assert.deepEqual(simulation.velocity, expected.velocity);
+      assert.equal(simulation.released, expected.released);
+    }
+  }
+});
+
+test('repeated pauses still finish with every grain in the lower chamber', () => {
+  for (const grainSize of [2, 3]) {
+    const simulation = createSimulation({ grainSize });
+    const initial = inventory(simulation);
+    for (const elapsed of [1, 12.5, 30, 60, 90, 110, 120]) {
+      simulation.advance(elapsed);
+      const released = simulation.released;
+      simulation.settlePaused(2);
+      assert.equal(simulation.released, released);
+      assert.deepEqual(inventory(simulation).tones, initial.tones);
+    }
+    assert.equal(inventory(simulation).upper, 0);
+    assert.equal(airborneCount(simulation), 0);
+    assert.equal(simulation.tick, 120 * simulation.stepsPerSecond);
+  }
 });
 
 test('produces identical results at 30, 60, and 144 fps and after a background gap', () => {
@@ -180,6 +260,15 @@ test('the app defaults to chunky grains and preserves the smaller comparison', (
   assert.equal(sandGrainSize('?grain=2'), 2);
 });
 
+test('the page and offline cache request matching versioned physics and renderer assets', () => {
+  const html = fs.readFileSync(path.join(__dirname, 'index.html'), 'utf8');
+  const worker = fs.readFileSync(path.join(__dirname, 'sw.js'), 'utf8');
+  const physics = html.match(/src="(sand-physics\.js\?v=[^"]+)"/)[1];
+  const renderer = html.match(/src="(sand-timer\.jsx\?v=[^"]+)"/)[1];
+  assert.equal(physics.split('?v=')[1], renderer.split('?v=')[1]);
+  for (const asset of [physics, renderer]) assert.ok(worker.includes(`"./${asset}"`));
+});
+
 test('both grain sizes render as solid pixel-art blocks', () => {
   for (const grainSize of [2, 3]) {
     const simulation = createSimulation({ grainSize });
@@ -284,27 +373,80 @@ test('buried grain tones do not make the internal flow visible through the face'
   assert.deepEqual(render(simulation), before);
 });
 
-test('draining changes the surface without animating a stripe through the upper face', () => {
+test('draining only nudges a few front-facing grains while keeping the bed opaque', () => {
   const simulation = createSimulation();
   simulation.advance(60);
   const before = render(simulation);
   const first = projectSandFront(simulation);
+  const releasedBefore = simulation.released;
   simulation.advance(60.5);
   const after = render(simulation);
   const second = projectSandFront(simulation);
   let checked = 0;
+  let changed = 0;
+  let nearMouth = 0;
   for (let y = simulation.firstRow; y < simulation.neckRow; y++) {
     for (let x = 0; x < simulation.width; x++) {
       const index = y * simulation.width + x;
       if (!first.upperFace[index] || !second.upperFace[index]) continue;
       if (y <= Math.max(first.topSurface[x], second.topSurface[x]) + 1) continue;
       const pixel = y * 2 * 124 + x * 2;
-      assert.equal(after.get(pixel), before.get(pixel), `hidden flow leaked through at ${x},${y}`);
+      assert.ok(after.has(pixel), 'texture motion punched a hole in the front face');
+      if (after.get(pixel) !== before.get(pixel)) {
+        changed++;
+        if ((simulation.neckRow - y) * simulation.grainSize <= 32) nearMouth++;
+      }
       checked++;
     }
   }
   assert.ok(checked > 500);
+  assert.ok(changed > 0, 'the upper texture is still completely static');
+  assert.ok(changed <= 2 * (simulation.released - releasedBefore), 'too much of the face changed at once');
+  assert.ok(nearMouth > 0, 'no movement near the mouth');
   assert.notDeepEqual(before, after, 'surface and stream failed to advance');
+});
+
+test('front texture shifts are neighboring exchanges concentrated near the mouth', () => {
+  const simulation = createSimulation({ grainSize: 3 });
+  let previous = sandFaceTexture(simulation).slice();
+  let exchanges = 0;
+  let nearMouth = 0;
+  for (let event = 1; event <= 120; event++) {
+    simulation.released = event; // Isolate the decorative response to outflow.
+    const current = sandFaceTexture(simulation).slice();
+    const changed = [];
+    current.forEach((tone, index) => { if (tone !== previous[index]) changed.push(index); });
+    assert.ok(changed.length === 0 || changed.length === 2, 'texture shuffled more than a neighboring pair');
+    if (changed.length) {
+      const [from, to] = changed;
+      const y = Math.floor(from / simulation.width);
+      assert.equal(Math.floor(to / simulation.width), y + 1);
+      assert.ok(Math.abs(to % simulation.width - from % simulation.width) <= 1);
+      assert.equal(current[from], previous[to]);
+      assert.equal(current[to], previous[from]);
+      assert.ok(to < simulation.neckRow * simulation.width, 'lower pile texture moved');
+      exchanges++;
+      if ((simulation.neckRow - y) * simulation.grainSize <= 33) nearMouth++;
+    }
+    previous = current;
+  }
+  assert.ok(exchanges > 20, 'front texture barely moved');
+  assert.ok(nearMouth > exchanges * 0.7, 'motion was not concentrated near the mouth');
+});
+
+test('front texture is deterministic across render rates and restores on reset', () => {
+  const direct = createSimulation({ grainSize: 3 });
+  const initial = render(direct);
+  direct.advance(10);
+  const expected = render(direct);
+  const frequent = createSimulation({ grainSize: 3 });
+  for (let frame = 1; frame <= 300; frame++) {
+    frequent.advance(frame / 30);
+    sandFaceTexture(frequent);
+  }
+  assert.deepEqual(render(frequent), expected);
+  frequent.advance(0);
+  assert.deepEqual(render(frequent), initial);
 });
 
 test('projection is read-only and an isolated neck grain does not become a fake pile', () => {
