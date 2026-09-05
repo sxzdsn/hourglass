@@ -20,6 +20,11 @@ const SAND_COLORS = [
   [151, 108, 43], [172, 127, 48], [191, 146, 56], [207, 163, 66],
   [221, 179, 80], [231, 193, 100], [241, 207, 124], [250, 225, 156],
 ];
+function sandGrainSize(search) {
+  // Chunky by default; retain the smaller grains at ?grain=2 for comparison.
+  return new URLSearchParams(search).get("grain") === "2" ? 2 : 3;
+}
+
 function projectSandFront(simulation) {
   const { cells, mask, width, firstRow, neckRow, lastRow } = simulation;
   const upperFace = new Uint8Array(cells.length);
@@ -279,6 +284,7 @@ function SandTimer() {
     const simulation = SandPhysics.fromGlass({
       width: DISP_W, height: DISP_H, rows: GLASS_ROWS,
       neckRow: NECK_ROW, duration: TOTAL_GRAINS,
+      grainSize: sandGrainSize(window.location.search),
     });
     let rafId;
 

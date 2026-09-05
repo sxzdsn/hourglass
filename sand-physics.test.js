@@ -9,11 +9,15 @@ const SandPhysics = require('./sand-physics.js');
 // edges and omitted scanlines, rather than an idealized rectangular container.
 const source = fs.readFileSync(path.join(__dirname, 'sand-timer.jsx'), 'utf8');
 const rows = JSON.parse(source.match(/const GLASS_ROWS = (.*);/)[1]);
-const createSimulation = () => SandPhysics.fromGlass({
+const createSimulation = (options = {}) => SandPhysics.fromGlass({
   width: 124, height: 280, rows, neckRow: 129, duration: 120,
+  ...options,
 });
 const renderSource = source.slice(source.indexOf('const SAND_COLORS'), source.indexOf('const FONT'));
-const { drawSand, projectSandFront } = vm.runInNewContext(`const CX = 62; ${renderSource}; ({ drawSand, projectSandFront })`);
+const { drawSand, projectSandFront, sandGrainSize } = vm.runInNewContext(
+  `const CX = 62; ${renderSource}; ({ drawSand, projectSandFront, sandGrainSize })`,
+  { URLSearchParams },
+);
 function render(simulation) {
   const pixels = new Map();
   drawSand(simulation, 0, 0, 1, (x, y, color) => pixels.set(y * 124 + x, color.join(',')));
@@ -169,21 +173,56 @@ test('the upper bed stays packed rather than showing rising air pockets', () => 
   }
 });
 
-test('the visible sand uses solid 2 by 2 pixel-art blocks', () => {
-  const simulation = createSimulation();
-  assert.equal(simulation.grainSize, 2);
-  assert.equal(simulation.width, 62);
-  assert.equal(simulation.height, 140);
-  simulation.advance(60);
-  const pixels = render(simulation);
-  assert.ok(pixels.size > 0);
-  assert.equal(pixels.size % 4, 0);
-  pixels.forEach((_, index) => {
-    const x = Math.floor(index % 124 / 2) * 2;
-    const y = Math.floor(Math.floor(index / 124) / 2) * 2;
-    const color = pixels.get(y * 124 + x);
-    for (const offset of [1, 124, 125]) assert.equal(pixels.get(y * 124 + x + offset), color);
-  });
+test('the app defaults to chunky grains and preserves the smaller comparison', () => {
+  for (const search of ['', '?grain=3', '?grain=invalid', '?grain=0']) {
+    assert.equal(sandGrainSize(search), 3);
+  }
+  assert.equal(sandGrainSize('?grain=2'), 2);
+});
+
+test('both grain sizes render as solid pixel-art blocks', () => {
+  for (const grainSize of [2, 3]) {
+    const simulation = createSimulation({ grainSize });
+    assert.equal(simulation.grainSize, grainSize);
+    assert.equal(simulation.width, Math.ceil(124 / grainSize));
+    assert.equal(simulation.height, Math.ceil(280 / grainSize));
+    simulation.advance(60);
+    const pixels = render(simulation);
+    assert.ok(pixels.size > 0);
+    assert.equal(pixels.size % (grainSize * grainSize), 0);
+    pixels.forEach((_, index) => {
+      const x = Math.floor(index % 124 / grainSize) * grainSize;
+      const y = Math.floor(Math.floor(index / 124) / grainSize) * grainSize;
+      const color = pixels.get(y * 124 + x);
+      for (let dy = 0; dy < grainSize; dy++) {
+        for (let dx = 0; dx < grainSize; dx++) {
+          assert.equal(pixels.get((y + dy) * 124 + x + dx), color);
+        }
+      }
+    });
+  }
+});
+
+test('the chunkier sand conserves its grains, finishes on time, and resets', () => {
+  const simulation = createSimulation({ grainSize: 3 });
+  const startingCells = simulation.cells.slice();
+  const initial = inventory(simulation);
+  let previousUpper = initial.upper;
+  for (const elapsed of [0.5, 1, 10, 30, 60, 90, 118.5, 120]) {
+    simulation.advance(elapsed);
+    const current = inventory(simulation);
+    assert.deepEqual(current.tones, initial.tones);
+    assert.ok(current.upper <= previousUpper);
+    previousUpper = current.upper;
+    const { upperFace } = projectSandFront(simulation);
+    assert.equal(upperFace.reduce((sum, value) => sum + value, 0), current.upper);
+  }
+  assert.equal(previousUpper, 0, 'chunkier grains remained above the neck at 0:00');
+  const completed = simulation.cells.slice();
+  for (let i = 0; i < 120; i++) simulation.step();
+  assert.deepEqual(simulation.cells, completed, 'chunkier pile was still settling at completion');
+  simulation.advance(0);
+  assert.deepEqual(simulation.cells, startingCells);
 });
 
 test('front-view level follows remaining sand, not the hidden center funnel', () => {
