@@ -3,6 +3,7 @@ This is my first vibecoded project with claude code and codex, nanobanana for as
 
 I've been weirdly missing the messy old school design prototyping (<2024) method of linking up static frames together with blue spaghetti. Mapping out png sequences comes pretty close:
 
+![Hourglass animation frame sequences showing pause, unpause, and reset transitions in both orientations.](docs/images/animation-sequences.png)
 
 
 
